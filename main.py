@@ -171,17 +171,21 @@ def main():
             executor.submit(tokenizer.tokenize_file, path): path for path in files
         }
         with progress:
-            for future in concurrent.futures.as_completed(future_to_file):
-                try:
-                    count = future.result()
-                    total += count
-                    files_scanned += 1
-                    progress.update(
-                        task, advance=1, tokens=humanfriendly.format_number(total)
-                    )
-                except Exception as e:
-                    print(f"Whoops exception: {e}")
-                    raise
+            try:
+                for future in concurrent.futures.as_completed(future_to_file):
+                    try:
+                        count = future.result()
+                        total += count
+                        files_scanned += 1
+                        progress.update(
+                            task, advance=1, tokens=humanfriendly.format_number(total)
+                        )
+                    except Exception as e:
+                        print(f"Whoops exception: {e}")
+                        raise
+            except KeyboardInterrupt:
+                executor.shutdown(wait=False, cancel_futures=True)
+                sys.exit()
 
     end_time = time.monotonic()
 
@@ -201,15 +205,8 @@ def main():
 
     console.print(t)
 
-    # # Set outputs
-    # if outfile_name := os.environ.get("GITHUB_OUTPUT",""):
-    #     outfile = open(outfile_name, "a")
-    # else:
-    #     outfile = sys.stdout
-    #     outfile.write(f"tokens={total}\n")
-    #     outfile.write(f"percentage={pct}\n")
-    #     outfile.write(f"badge={badge}\n")
-
-
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit()
