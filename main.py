@@ -10,32 +10,40 @@
 
 import os
 import sys
+import enum
 import glob
 import time
-import enum
-import sqlite3
 import hashlib
+import pathlib
+import sqlite3
 import argparse
 import threading
 import concurrent.futures
 
 import tiktoken
 import humanfriendly
-
-from rich.progress import Progress, MofNCompleteColumn, track
 from rich.table import Table
 from rich.console import Console
+from rich.progress import Progress, MofNCompleteColumn
+from rich_argparse import RichHelpFormatter
+
+try:
+    CORE_COUNT = os.process_cpu_count()
+except AttributeError:
+    CORE_COUNT = len(os.sched_getaffinity(0))
+
 
 class ExitCodes(enum.IntEnum):
     OK = 0
     NOFILES = enum.auto()
 
-TIKTOKEN_ENCODINGS = [
-    "o200k_base",
-    "cl100k_base",
-    "p50k_base",
-    "r50k_base"
-]
+
+TIKTOKEN_ENCODINGS = ["o200k_base", "cl100k_base", "p50k_base", "r50k_base"]
+
+HELP_EPILOGUE = """
+The tiktoken library, which this script uses, supports several encoding options; for more information about them: https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb
+"""
+
 
 class FileTokenizer:
     def __init__(self, encoding: str, cache=True):
@@ -44,22 +52,32 @@ class FileTokenizer:
         self.load_cache()
         self.encoding = tiktoken.get_encoding(encoding)
         self.lock = threading.Lock()
+
     def load_cache(self):
         if self.cache is False:
             return
         self.conn = sqlite3.connect("cache.db", check_same_thread=False)
         self.cur = self.conn.cursor()
         self.cur.execute("CREATE TABLE IF NOT EXISTS cache(hash, token_count)")
+        self.cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS hashdex ON cache(hash)")
+        self.conn.commit()
         res = self.cur.execute("SELECT * FROM cache")
         self.cache_data = dict(res.fetchall())
+
     def cache_save(self, digest: str, count: int):
         with self.lock:
-            self.cur.execute("INSERT INTO cache VALUES (?, ?)", (digest, count))
-            self.conn.commit()
+            try:
+                self.cur.execute("INSERT INTO cache VALUES (?, ?)", (digest, count))
+                self.conn.commit()
+            except sqlite3.IntegrityError:
+                pass
             self.cache_data[digest] = count
+
     def tokenize_file(self, path: str):
         with open(path, "r", encoding="utf-8", errors="ignore") as infile:
             file_content = infile.read()
+            if len(file_content) == 0:
+                return 0
         digest = hashlib.sha256(file_content.encode()).hexdigest()
         try:
             count = self.cache_data[digest]
@@ -73,22 +91,57 @@ def main():
 
     parser = argparse.ArgumentParser(
         description="A script to wrap the tiktoken tokenizer to count tokens in a codebase.",
-        epilog="Tiktoken supports several options; for more information: https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb"
-        )
+        epilog=HELP_EPILOGUE,
+        formatter_class=RichHelpFormatter,
+    )
     parser.add_argument("files", nargs="*", help="Files to scan")
-    parser.add_argument("--include", action='append', default=[], help="Include files matching glob; can be specified multiple times")
-    parser.add_argument("--exclude", action='append', default=[], help="Exclude files matching glob; can be specified multiple times")
-    parser.add_argument("--context-window", type=int, default=0, help="The length of the content window to compare against")
-    parser.add_argument("--tokenizer-encoding", choices=TIKTOKEN_ENCODINGS, default="o200k_base", help="The tokenizer encoding to use; default: o200k_base")
-    parser.add_argument("--no-cache", action="store_false", dest="cache", default=True, help="Don't write to or read from the cache")
-    parser.add_argument("--parallel", default=os.process_cpu_count(), help="The number of parallel threads to use; defaults to the number of CPU cores available to the script.")
+    parser.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        help="Include files matching glob; can be specified multiple times",
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="Exclude files matching glob; can be specified multiple times",
+    )
+    parser.add_argument(
+        "--context-window",
+        type=int,
+        default=0,
+        help="The length of the content window to compare against",
+    )
+    parser.add_argument(
+        "--tokenizer-encoding",
+        choices=TIKTOKEN_ENCODINGS,
+        default="o200k_base",
+        help="The tokenizer encoding to use; default: o200k_base",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_false",
+        dest="cache",
+        default=True,
+        help="Don't write to or read from the cache",
+    )
+    parser.add_argument(
+        "--parallel",
+        default=CORE_COUNT,
+        help="The number of parallel threads to use; defaults to the number of CPU cores available to the script.",
+    )
 
     args = parser.parse_args()
 
     # Expand globs
     included = set()
-    for pattern in args.include:
+    for pattern in args.include + args.files:
         included.update(glob.glob(pattern, recursive=True))
+
+    if not args.include and not args.files:
+        print("No files specified, scanning everything", file=sys.stderr)
+        included.update(glob.glob("**/*", recursive=True))
 
     excluded = set()
     for pattern in args.exclude:
@@ -98,7 +151,10 @@ def main():
     files = sorted([f for f in files_accepted if os.path.isfile(f)])
 
     if not files:
-        print("No files found to process. Did you specify files which don't exist?", file=sys.stderr)
+        print(
+            "No files specified to scan (or everything was excluded). ",
+            file=sys.stderr,
+        )
         sys.exit(ExitCodes.NOFILES)
 
     progress = Progress(
@@ -106,27 +162,29 @@ def main():
         "Files processed:",
         MofNCompleteColumn(),
         "Tokens found: {task.fields[tokens]}",
-        console=console
+        console=console,
     )
 
     tokenizer = FileTokenizer(args.tokenizer_encoding)
 
     task = progress.add_task("Tokenizing files", tokens=0, total=len(files))
 
-    # Count tokens
-    enc = tiktoken.get_encoding(args.tokenizer_encoding)
     total = 0
     files_scanned = 0
     start_time = time.monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel) as executor:
-        future_to_file = {executor.submit(tokenizer.tokenize_file, path): path for path in files}
+        future_to_file = {
+            executor.submit(tokenizer.tokenize_file, path): path for path in files
+        }
         with progress:
             for future in concurrent.futures.as_completed(future_to_file):
                 try:
                     count = future.result()
                     total += count
                     files_scanned += 1
-                    progress.update(task, advance=1, tokens=humanfriendly.format_number(total))
+                    progress.update(
+                        task, advance=1, tokens=humanfriendly.format_number(total)
+                    )
                 except Exception as e:
                     print(f"Whoops exception: {e}")
                     raise
@@ -135,7 +193,7 @@ def main():
 
     t = Table()
     t.show_header = False
-    
+
     t.add_row("Files scanned", humanfriendly.format_number(files_scanned))
     if args.context_window:
         tokens_used = f"{humanfriendly.format_number(total)} / {humanfriendly.format_number(args.context_window)}"
@@ -146,7 +204,7 @@ def main():
         pct = round(total / args.context_window * 100)
         t.add_row("Context window used", f"{pct}%")
     t.add_row("Time taken", humanfriendly.format_timespan(end_time - start_time))
-    
+
     console.print(t)
 
     # # Set outputs
@@ -158,5 +216,6 @@ def main():
     #     outfile.write(f"percentage={pct}\n")
     #     outfile.write(f"badge={badge}\n")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

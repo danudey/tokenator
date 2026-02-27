@@ -1,2 +1,5 @@
 cache.db
 .venv
+*.egg-info
+build
+__pycache__
