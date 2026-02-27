@@ -42,6 +42,7 @@ options:
   --parallel PARALLEL   The number of parallel threads to use; defaults to the number of CPU cores available to the script.
 
 Tiktoken supports several options; for more information: https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb```
+```
 
 TL;DR:
 
