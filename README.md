@@ -2,6 +2,20 @@
 
 This code was pulled from the [NanoClaw repo-tokens GitHub Action](https://github.com/qwibitai/nanoclaw/tree/main/repo-tokens) and modified for simpler purposes.
 
+## Installation
+
+Use [`uv`](https://docs.astral.sh/uv/getting-started/installation/) or [`pipx`](https://pipx.pypa.io/latest/installation/):
+
+```sh
+uv tool install git+https://github.com/danudey/tokenator
+```
+
+or
+
+```sh
+pipx install git+https://github.com/danudey/tokenator
+```
+
 ## Usage
 
 The `--help` output is pretty comprehensive.
