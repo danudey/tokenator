@@ -8,7 +8,7 @@ The `--help` output is pretty comprehensive.
 
 ```
 usage: tokenator.py [-h] [--include INCLUDE] [--exclude EXCLUDE] [--context-window CONTEXT_WINDOW]
-                    [--tokenizer-encoding {o200k_base,cl100k_base,p50k_base,r50k_base}] [--no-cache]
+                    [--tokenizer-encoding {o200k_base,cl100k_base,p50k_base,r50k_base}] [--no-cache] [--parallel PARALLEL]
                     [files ...]
 
 A script to wrap the tiktoken tokenizer to count tokens in a codebase.
@@ -25,6 +25,7 @@ options:
   --tokenizer-encoding {o200k_base,cl100k_base,p50k_base,r50k_base}
                         The tokenizer encoding to use; default: o200k_base
   --no-cache            Don't write to or read from the cache
+  --parallel PARALLEL   The number of parallel threads to use; defaults to the number of CPU cores available to the script.
 
 Tiktoken supports several options; for more information: https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb```
 
@@ -43,3 +44,7 @@ You can use `--tokenizer-encoding` to specify which encoding to use; more inform
 ## Cache
 
 The script keeps a cache of results in an sqlite database called `cache.db`, indexed by a sha256 hash of the file contents. If a file's hash exists in the database then the cached result will be used; otherwise, the token count will be computed as normal and stored in the DB. This allows for more rapid iterative scanning (though each file still needs its hash computed) which can be useful if you're using globs to find different 'slices' of a codebase to analyze (e.g. 'what if I do all files vs. just *.h files?').
+
+## Parallel
+
+By default the script will run multiple threads in parallel; the number of threads defaults to the number of CPU cores currently available to the process (which may not be the same as the number of CPU cores on the system). See https://docs.python.org/3/library/os.html#os.process_cpu_count for implementation details. You can override the default with `--parallel`.

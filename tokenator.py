@@ -16,11 +16,13 @@ import enum
 import sqlite3
 import hashlib
 import argparse
+import threading
+import concurrent.futures
 
 import tiktoken
 import humanfriendly
 
-from rich.progress import Progress, MofNCompleteColumn
+from rich.progress import Progress, MofNCompleteColumn, track
 from rich.table import Table
 from rich.console import Console
 
@@ -35,6 +37,37 @@ TIKTOKEN_ENCODINGS = [
     "r50k_base"
 ]
 
+class FileTokenizer:
+    def __init__(self, encoding: str, cache=True):
+        self.cache_data = {}
+        self.cache = cache
+        self.load_cache()
+        self.encoding = tiktoken.get_encoding(encoding)
+        self.lock = threading.Lock()
+    def load_cache(self):
+        if self.cache is False:
+            return
+        self.conn = sqlite3.connect("cache.db", check_same_thread=False)
+        self.cur = self.conn.cursor()
+        self.cur.execute("CREATE TABLE IF NOT EXISTS cache(hash, token_count)")
+        res = self.cur.execute("SELECT * FROM cache")
+        self.cache_data = dict(res.fetchall())
+    def cache_save(self, digest: str, count: int):
+        with self.lock:
+            self.cur.execute("INSERT INTO cache VALUES (?, ?)", (digest, count))
+            self.conn.commit()
+            self.cache_data[digest] = count
+    def tokenize_file(self, path: str):
+        with open(path, "r", encoding="utf-8", errors="ignore") as infile:
+            file_content = infile.read()
+        digest = hashlib.sha256(file_content.encode()).hexdigest()
+        try:
+            count = self.cache_data[digest]
+        except KeyError:
+            count = len(self.encoding.encode(file_content))
+            self.cache_save(digest, count)
+        return count
+
 def main():
     console = Console()
 
@@ -48,6 +81,7 @@ def main():
     parser.add_argument("--context-window", type=int, default=0, help="The length of the content window to compare against")
     parser.add_argument("--tokenizer-encoding", choices=TIKTOKEN_ENCODINGS, default="o200k_base", help="The tokenizer encoding to use; default: o200k_base")
     parser.add_argument("--no-cache", action="store_false", dest="cache", default=True, help="Don't write to or read from the cache")
+    parser.add_argument("--parallel", default=os.process_cpu_count(), help="The number of parallel threads to use; defaults to the number of CPU cores available to the script.")
 
     args = parser.parse_args()
 
@@ -75,41 +109,28 @@ def main():
         console=console
     )
 
+    tokenizer = FileTokenizer(args.tokenizer_encoding)
+
     task = progress.add_task("Tokenizing files", tokens=0, total=len(files))
-
-    if args.cache:
-        cache_conn = sqlite3.connect("cache.db")
-        cur = cache_conn.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS cache(hash, token_count)")
-
-        res = cur.execute("SELECT * FROM cache")
-        cache_values = dict(res.fetchall())
-    else:
-        cache_values = dict()
 
     # Count tokens
     enc = tiktoken.get_encoding(args.tokenizer_encoding)
     total = 0
     files_scanned = 0
     start_time = time.monotonic()
-    with progress:
-        for path in files:
-            try:
-                with open(path, "r", encoding="utf-8", errors="ignore") as infile:
-                    file_content = infile.read()
-                    digest = hashlib.sha256(file_content.encode()).hexdigest()
-                    try:
-                        count = cache_values[digest]
-                    except KeyError:
-                        count = len(enc.encode(file_content))
-                        if args.cache:
-                            cur.execute("INSERT INTO cache VALUES (?, ?)", (digest, count))
-                            cache_conn.commit()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel) as executor:
+        future_to_file = {executor.submit(tokenizer.tokenize_file, path): path for path in files}
+        with progress:
+            for future in concurrent.futures.as_completed(future_to_file):
+                try:
+                    count = future.result()
                     total += count
-                    progress.update(task, advance=1, tokens=humanfriendly.format_number(total))
                     files_scanned += 1
-            except Exception as e:
-                print(f"Skipping {path}: {e}")
+                    progress.update(task, advance=1, tokens=humanfriendly.format_number(total))
+                except Exception as e:
+                    print(f"Whoops exception: {e}")
+                    raise
+
     end_time = time.monotonic()
 
     t = Table()
