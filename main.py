@@ -14,7 +14,6 @@ import enum
 import glob
 import time
 import hashlib
-import pathlib
 import sqlite3
 import argparse
 import threading
@@ -28,7 +27,7 @@ from rich.progress import Progress, MofNCompleteColumn
 from rich_argparse import RichHelpFormatter
 
 try:
-    CORE_COUNT = os.process_cpu_count()
+    CORE_COUNT = os.process_cpu_count()  # type: ignore
 except AttributeError:
     CORE_COUNT = len(os.sched_getaffinity(0))
 
@@ -85,6 +84,7 @@ class FileTokenizer:
             count = len(self.encoding.encode(file_content))
             self.cache_save(digest, count)
         return count
+
 
 def main():
     console = Console()
