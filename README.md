@@ -7,9 +7,9 @@ This code was pulled from the [NanoClaw repo-tokens GitHub Action](https://githu
 The `--help` output is pretty comprehensive.
 
 ```
-usage: tokenator.py [-h] [--include INCLUDE] [--exclude EXCLUDE] [--context-window CONTEXT_WINDOW]
-                    [--tokenizer-encoding {o200k_base,cl100k_base,p50k_base,r50k_base}] [--no-cache] [--parallel PARALLEL]
-                    [files ...]
+usage: tokenator [-h] [--include INCLUDE] [--exclude EXCLUDE] [--context-window CONTEXT_WINDOW]
+                 [--tokenizer-encoding {o200k_base,cl100k_base,p50k_base,r50k_base}] [--no-cache] [--parallel PARALLEL]
+                 [files ...]
 
 A script to wrap the tiktoken tokenizer to count tokens in a codebase.
 
@@ -31,15 +31,32 @@ Tiktoken supports several options; for more information: https://github.com/open
 
 TL;DR:
 
-1. Pass `--include="<some glob>"` one or more times to list files to include
-2. Pass `--exclude="<some glob>"` one or more times to list files to exclude (overrides the includes)
-3. Files specified on the command line (optional) are added regardless of includes or excludes
+1. Pass a list of files or globs on the command-line
+2. Pass `--exclude="<some glob>"` one or more times to exclude specific files or globs
 
-If you specify `--context-window` the script will calculate what percentage of your context window your codebase uses.
+Note: if you do this, the shell will expand the glob and pass the list to the script, which may result in too long of a command-line:
+
+```sh
+tokenator **/*.go
+```
+
+If you do this, the script will expand the glob itself:
+
+```sh
+tokenator '**/*.go'
+```
+
+Do with this information what you will.
+
+## Context
+
+If you specify `--context-window` the script will calculate what percentage of your context window your codebase uses. No other effect.
 
 ## Encodings
 
 You can use `--tokenizer-encoding` to specify which encoding to use; more information on these encodings is available from the OpenAI Cookbook's [How to count tokens with tiktoken](https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb) document. The default is `o200k_base`, which is the tokenizer used for gpt-4o and gpt-4o-mini.
+
+Note that different AIs and AI generations tokenize differently, so Opus 4.6 may have a significantly different token count. If there are ways to add different tokenizers to tiktoken, let me know. PRs to use other tokenizers are also welcome!
 
 ## Cache
 

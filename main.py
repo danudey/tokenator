@@ -96,12 +96,6 @@ def main():
     )
     parser.add_argument("files", nargs="*", help="Files to scan")
     parser.add_argument(
-        "--include",
-        action="append",
-        default=[],
-        help="Include files matching glob; can be specified multiple times",
-    )
-    parser.add_argument(
         "--exclude",
         action="append",
         default=[],
@@ -136,10 +130,10 @@ def main():
 
     # Expand globs
     included = set()
-    for pattern in args.include + args.files:
-        included.update(glob.glob(pattern, recursive=True))
-
-    if not args.include and not args.files:
+    if args.files:
+        for pattern in args.files:
+            included.update(glob.glob(pattern, recursive=True))
+    else:
         print("No files specified, scanning everything", file=sys.stderr)
         included.update(glob.glob("**/*", recursive=True))
 
